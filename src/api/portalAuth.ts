@@ -30,7 +30,8 @@ export type SignInError = 'invalid' | 'locked' | 'rate_limited' | 'network' | 'u
 export type SignInResult = { ok: true; user: PortalUser; token: string } | { ok: false; error: SignInError; message?: string };
 
 const PORTAL_API = import.meta.env.VITE_PORTAL_API_URL as string | undefined;
-export const PREVIEW = !PORTAL_API && (import.meta.env.DEV || import.meta.env.VITE_PORTAL_PREVIEW === 'true');
+// Local `npm run dev` has no server functions, so it accepts any credentials.
+export const PREVIEW = import.meta.env.DEV && !PORTAL_API;
 
 export const SIGN_IN_MESSAGES: Record<SignInError, string> = {
   invalid: 'That username and password don’t match our records.',
@@ -41,20 +42,15 @@ export const SIGN_IN_MESSAGES: Record<SignInError, string> = {
 };
 
 export async function signIn(username: string, password: string): Promise<SignInResult> {
-  // ponytail: no backend yet — local dev, or a deploy with VITE_PORTAL_PREVIEW=true, accepts any credentials.
-  // Set VITE_PORTAL_API_URL to use the real service (and remove VITE_PORTAL_PREVIEW).
-  if (!PORTAL_API) {
-    if (!PREVIEW) return { ok: false, error: 'network', message: 'Sign-in isn’t configured yet (VITE_PORTAL_API_URL is not set).' };
+  if (PREVIEW) {
     await new Promise((r) => setTimeout(r, 600));
-    return {
-      ok: true,
-      token: 'dev-session',
-      user: { username, clientAccountNumber: '102-344-001-01-00-0001-00000' },
-    };
+    return { ok: true, token: '', user: { username, clientAccountNumber: '102-344-001-01-00-0001-00000' } };
   }
 
+  // Default: the portal's own Vercel function (api/login.ts). The backend team can point this at their service.
+  const url = PORTAL_API ? `${PORTAL_API}/auth/login` : '/api/login';
   try {
-    const res = await fetch(`${PORTAL_API}/auth/login`, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',

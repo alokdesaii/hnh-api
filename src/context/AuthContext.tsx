@@ -36,7 +36,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // storage unavailable
     }
-    return null;
+    // In production the server only serves the portal to signed-in visitors (middleware.ts),
+    // so reaching this code means the session cookie is valid even if nothing was stored locally.
+    return import.meta.env.DEV
+      ? null
+      : { username: 'Client', clientAccountNumber: '102-344-001-01-00-0001-00000', token: '', loginTime: new Date().toISOString(), role: 'client' };
   });
 
   // Bearer token for the API console, set by a successful 1.1 call in the sandbox. Separate from the portal session.
@@ -70,6 +74,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setUser(null);
     setApiToken('');
+    if (!import.meta.env.DEV) {
+      fetch('/api/logout', { method: 'POST' }).finally(() => window.location.replace('/login.html'));
+    }
   };
 
   const setToken = (newToken: string) => setApiToken(newToken);
