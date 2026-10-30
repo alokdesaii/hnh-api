@@ -115,9 +115,9 @@
     line-height: 1.5;
   }
 
+  /* Keep each element's own text colour (the console stays dark in light mode); a stronger teal shows on both. */
   ::selection {
-    background: var(--tide-wash);
-    color: var(--ink);
+    background: rgba(29, 186, 176, 0.32);
   }
 
   code, pre, kbd, .mono {
