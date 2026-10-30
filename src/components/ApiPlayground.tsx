@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import type { EndpointSpec, Parameter } from '../data/apiSpec';
 import { RELATIONSHIP_TYPES } from '../data/apiSpec';
 import { useAuth } from '../context/AuthContext';
-import { validateBody, conditionalRequirements } from '../utils/validate';
+import { validateBody, conditionalRequirements, unknownFields } from '../utils/validate';
 import {
   generateCurlSnippet,
   generateJavaScriptSnippet,
@@ -166,11 +166,13 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
     if (isAuth && code === 'HH5000' && typeof (result as { Token?: unknown }).Token === 'string') setToken((result as { Token: string }).Token);
   };
 
-  // Responses use the shapes in the document; Errors is a sandbox-only explanation.
+  // Responses use the shapes in the document; Errors and Warnings are sandbox-only explanations.
   const runSandbox = (start: number) => {
+    let warnings: string[] = [];
+    const done = (result: object, code: string) => finish(warnings.length ? { ...result, Warnings: warnings } : result, code, 200, start);
     const fail = (errors: string[]) => {
       setFieldErrors(errorsByField(errors));
-      finish({ StatusCode: 'HH5001', StatusMessage: 'Validate data', Errors: errors }, 'HH5001', 200, start);
+      done({ StatusCode: 'HH5001', StatusMessage: 'Validate data', Errors: errors }, 'HH5001');
     };
     setFieldErrors({});
 
@@ -192,21 +194,20 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
     if (endpoint.method === 'POST') {
       const body = parseBody();
       if (body === undefined) return fail(['The request body is not valid JSON.']);
+      warnings = unknownFields(body, params);
       const errors = validateBody(endpoint.id, body, params);
       if (errors.length) return fail(errors);
       if (endpoint.id === 'create-transaction') {
-        return finish(
+        return done(
           { ClientReferenceNo: String(body.ClientReferenceNo).trim(), TransactionNumber: String(Math.floor(100000000 + Math.random() * 900000000)), StatusCode: 'HH5000', StatusMessage: 'SUCCESS' },
-          'HH5000',
-          200,
-          start
+          'HH5000'
         );
       }
     }
 
     const sample = endpoint.sampleResponse as Record<string, unknown>;
     if (endpoint.id === 'transaction-status') return finish({ ...sample, ClientReferenceNo: pathValues.ClientReferenceNo }, String(sample.StatusCode), 200, start);
-    finish(sample, String(sample.StatusCode ?? 'HH5000'), 200, start);
+    done(sample, String(sample.StatusCode ?? 'HH5000'));
   };
 
   const handleExecuteRequest = () => {

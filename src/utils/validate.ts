@@ -6,26 +6,105 @@ import type { Parameter } from '../data/apiSpec';
 const blank = (v: unknown) => v === undefined || v === null || String(v).trim() === '';
 const enumValue = (opt: string) => opt.split(' (')[0];
 
+// ISO 3166-1 alpha-2 country codes and ISO 4217 currency codes, from the runtime's Intl data (no lists to maintain).
+const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+export const isCountryCode = (v: string) => {
+  if (!/^[A-Z]{2}$/.test(v)) return false;
+  try {
+    const name = regionNames.of(v);
+    return Boolean(name) && name !== v && name !== 'Unknown Region';
+  } catch {
+    return false;
+  }
+};
+const CURRENCIES = new Set(Intl.supportedValuesOf('currency'));
+export const isCurrencyCode = (v: string) => CURRENCIES.has(v);
+
+// MM/DD/YYYY and a real calendar date.
+export const isUsDate = (v: string) => {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
+  if (!m) return false;
+  const [mm, dd, yyyy] = [+m[1], +m[2], +m[3]];
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+  return d.getUTCFullYear() === yyyy && d.getUTCMonth() === mm - 1 && d.getUTCDate() === dd;
+};
+
+const COUNTRY_FIELDS = new Set(['BeneficiaryCountry', 'BeneficiaryNationality', 'BeneficiaryPlaceOfBirth', 'BankCountry', 'IncorporationCountry', 'CountryOfOperation', 'Country', 'Nationality', 'BirthCountry']);
+const CURRENCY_FIELDS = new Set(['PayInCurrency', 'PayOutCurrency']);
+const isNumeric = (v: unknown) => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()));
+
 function checkFields(body: Record<string, unknown>, params: Parameter[], prefix = ''): string[] {
   const errors: string[] = [];
   for (const p of params) {
     const v = body[p.name];
-    if (p.required === 'Y' && blank(v)) errors.push(`${prefix}${p.name} is mandatory.`);
+    const name = `${prefix}${p.name}`;
+    if (p.required === 'Y' && blank(v)) errors.push(`${name} is mandatory.`);
     if (blank(v)) continue;
-    if (p.length && typeof p.length === 'number' && String(v).length > p.length) {
-      errors.push(`${prefix}${p.name} is longer than ${p.length} characters.`);
+    const text = String(v).trim();
+
+    // Types
+    if (p.type === 'Decimal') {
+      if (!isNumeric(v)) {
+        errors.push(`${name} must be a number.`);
+        continue;
+      }
+      // The spec limits decimals only where the remark says so (PayInAmount, PayOutAmount), not Rate or Fee.
+      if (/2 decimal/i.test(p.description) && !/^-?\d+(\.\d{1,2})?$/.test(text)) {
+        errors.push(`${name} can have at most 2 decimal places.`);
+      }
+      continue;
     }
-    if (p.enumOptions && !p.enumOptions.map(enumValue).includes(String(v))) {
-      errors.push(`${prefix}${p.name} must be one of: ${p.enumOptions.map(enumValue).join(', ')}.`);
+    if (typeof v !== 'string') {
+      errors.push(`${name} must be text (a JSON string), not ${Array.isArray(v) ? 'a list' : typeof v}.`);
+      continue;
     }
-    if (p.type === 'Decimal' && !/^-?\d+(\.\d{1,2})?$/.test(String(v))) {
-      errors.push(`${prefix}${p.name} must be a number with up to 2 decimal places.`);
+
+    if (p.length && typeof p.length === 'number' && v.length > p.length) {
+      errors.push(`${name} is longer than ${p.length} characters.`);
     }
-    if (p.type === 'Date' && !/^\d{4}-\d{2}-\d{2}$/.test(String(v))) {
-      errors.push(`${prefix}${p.name} must be a date in YYYY-MM-DD format.`);
+    if (p.enumOptions && !p.enumOptions.map(enumValue).includes(text)) {
+      errors.push(`${name} must be one of: ${p.enumOptions.map(enumValue).join(', ')}.`);
+    }
+    if (p.type === 'Date' && !/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      errors.push(`${name} must be a date in YYYY-MM-DD format.`);
+    }
+    if (p.description.includes('MM/DD/YYYY') && !isUsDate(text)) {
+      errors.push(`${name} must be a real date in MM/DD/YYYY format.`);
+    }
+    if (COUNTRY_FIELDS.has(p.name) && !isCountryCode(text)) {
+      errors.push(`${name} must be an ISO 2-letter country code in capitals, e.g. US or HK.`);
+    }
+    if (CURRENCY_FIELDS.has(p.name) && !isCurrencyCode(text)) {
+      errors.push(`${name} must be an ISO 3-letter currency code in capitals, e.g. USD.`);
+    }
+    if (p.name === 'BeneficiaryMobileNo' && !/^\+\d{7,14}$/.test(text)) {
+      errors.push(`${name} must start with + and the country code, then digits only, e.g. +91XXXXXXXXXX.`);
+    }
+    if (p.name === 'OtherCodeType' && text !== 'IBAN') {
+      errors.push(`${name} must be "IBAN".`);
     }
   }
   return errors;
+}
+
+// Fields the method doesn't define — usually a typo, e.g. "RelationShip" for "Relationship".
+// Reported as warnings: the spec doesn't say whether the gateway rejects them.
+export function unknownFields(body: unknown, params: Parameter[]): string[] {
+  const top = params.filter((p) => !p.name.includes('[].')).map((p) => p.name);
+  const nested = params.filter((p) => p.name.startsWith('FileUpload[].')).map((p) => p.name.slice('FileUpload[].'.length));
+  if (nested.length) top.push('FileUpload');
+  const check = (o: unknown, known: string[], prefix: string) =>
+    o && typeof o === 'object' && !Array.isArray(o)
+      ? Object.keys(o).filter((k) => !known.includes(k)).map((k) => {
+          const close = known.find((x) => x.toLowerCase() === k.toLowerCase());
+          return `${prefix}${k} isn't a field of this method${close ? ` — did you mean ${close}?` : ''}`;
+        })
+      : [];
+  if (Array.isArray(body)) return body.flatMap((item, i) => check(item, top, `[${i}] `));
+  const out = check(body, top, '');
+  const files = (body as Record<string, unknown> | null)?.FileUpload;
+  if (nested.length && Array.isArray(files)) files.forEach((f, i) => out.push(...check(f, nested, `FileUpload[${i}].`)));
+  return out;
 }
 
 // Conditional (C) rules for 1.2 Create Transaction, as written in the field remarks.
@@ -60,10 +139,21 @@ export function conditionalRequirements(b: Record<string, unknown>): { field: st
   return out;
 }
 
-const transactionRules = (b: Record<string, unknown>) =>
-  conditionalRequirements(b)
+const transactionRules = (b: Record<string, unknown>) => {
+  const errors = conditionalRequirements(b)
     .filter(({ field }) => blank(b[field]))
     .map(({ field, why }) => `${field} is required ${why}.`);
+  const pt = String(b.PaymentType ?? '');
+  const codeType = String(b.BeneficiaryBankCodeType ?? '');
+  // BSB: required when the bank is in Australia and PaymentType is C2C or B2C; format as in the spec (e.g. 612-123).
+  if (b.TransactionType === 'AT' && b.BankCountry === 'AU' && (pt === 'C2C' || pt === 'B2C') && codeType !== 'BSB') {
+    errors.push(`BeneficiaryBankCodeType must be BSB when BankCountry is AU and PaymentType is ${pt}.`);
+  }
+  if (codeType === 'BSB' && !blank(b.BeneficiaryBankCode) && !/^\d{3}-\d{3}$/.test(String(b.BeneficiaryBankCode))) {
+    errors.push('BeneficiaryBankCode must be a BSB in the format 123-456 when BeneficiaryBankCodeType is BSB.');
+  }
+  return errors;
+};
 
 export function validateBody(endpointId: string, body: unknown, params: Parameter[]): string[] {
   // 1.9 takes an array of files
@@ -87,20 +177,4 @@ export function validateBody(endpointId: string, body: unknown, params: Paramete
   return errors;
 }
 
-// Self-check: `node --experimental-strip-types src/utils/validate.ts`
-if ((globalThis as { process?: { argv?: string[] } }).process?.argv?.[1]?.endsWith('validate.ts')) {
-  const P = (name: string, required: 'Y' | 'C' | 'O', extra: Partial<Parameter> = {}): Parameter => ({ name, type: 'String', required, description: '', ...extra });
-  const params = [P('PaymentType', 'Y', { enumOptions: ['B2B', 'C2C'] }), P('TransactionType', 'Y'), P('PayInAmount', 'Y', { type: 'Decimal' }), P('ClientReferenceNo', 'Y', { length: 5 })];
-  const ok = { PaymentType: 'C2C', TransactionType: 'WT', PayInAmount: 10.5, ClientReferenceNo: 'A1', BeneficiaryFirstName: 'a', BeneficiaryLastName: 'b', Relationship: 'Spouse', BeneficiaryMobileNo: '+1' };
-  const assert = (cond: boolean, msg: string) => { if (!cond) throw new Error(msg); };
-  assert(validateBody('create-transaction', ok, params).length === 0, 'valid body should pass');
-  assert(validateBody('create-transaction', { ...ok, Relationship: '' }, params).some((e) => e.startsWith('Relationship')), 'C2C needs Relationship');
-  assert(validateBody('create-transaction', { ...ok, TransactionType: 'AT' }, params).filter((e) => e.includes('AT')).length === 5, 'AT needs 5 bank fields');
-  assert(validateBody('create-transaction', { ...ok, TransactionType: 'AT', BeneficiaryBankCodeType: 'IFSC' }, params).some((e) => e.startsWith('BankName')), 'IFSC needs BankName');
-  assert(validateBody('create-transaction', { ...ok, PaymentType: 'X' }, params).some((e) => e.includes('one of')), 'enum enforced');
-  assert(validateBody('create-transaction', { ...ok, PayInAmount: '1.234' }, params).some((e) => e.includes('decimal')), 'decimals enforced');
-  assert(validateBody('create-transaction', { ...ok, ClientReferenceNo: '123456' }, params).some((e) => e.includes('longer')), 'length enforced');
-  assert(validateBody('upload-file', [], [P('FileName', 'Y')]).length === 1, 'empty array rejected');
-  assert(validateBody('remitter-file-upload', { SubClientAccountNumber: 'x', FileUpload: [{}] }, [P('SubClientAccountNumber', 'Y'), P('FileUpload[].FileName', 'Y')])[0] === 'FileUpload[0].FileName is mandatory.', 'nested files checked');
-  console.log('validate.ts: all checks passed');
-}
+// Self-check lives in validate.check.ts (kept out of the app bundle).
