@@ -1,3 +1,5 @@
+import { WEBHOOK_OUTGOING_PROPOSED } from './proposedRules.ts';
+
 export interface Parameter {
   name: string;
   type: string;
@@ -8,6 +10,8 @@ export interface Parameter {
   enumOptions?: string[];
   /** Portal guidance, not part of the signed specification. */
   guidance?: string;
+  /** Proposed rule or field, pending approval — not in the signed specification. */
+  proposed?: boolean;
 }
 
 export interface HeaderParam {
@@ -629,12 +633,12 @@ export const API_ENDPOINTS: EndpointSpec[] = [
       {
         TransactionNumber: "453455453",
         FileName: "file1",
-        FileBase64String: "Base64String will come here"
+        FileBase64String: "SW52b2ljZSAxMDI0IC0gc2FtcGxlIGZpbGU="
       },
       {
         TransactionNumber: "453455453",
         FileName: "file2",
-        FileBase64String: "Base64String will come here"
+        FileBase64String: "QmlsbCBvZiBsYWRpbmcgLSBzYW1wbGUgZmlsZQ=="
       }
     ],
     sampleResponse: {
@@ -664,7 +668,7 @@ export const API_ENDPOINTS: EndpointSpec[] = [
           TransactionNumber: "12345678",
           FileName: "test2",
           FileExt: "pdf",
-          FileBase64String: "Base64String will come here."
+          FileBase64String: "JVBERi0xLjQKJSBzYW1wbGUgZG9jdW1lbnQK"
         }
       ],
       StatusCode: "HH5000",
@@ -746,14 +750,20 @@ export const API_ENDPOINTS: EndpointSpec[] = [
           { name: 'ClientRefNumber', type: 'String', required: 'O', description: '', guidance: 'The ClientReferenceNo you sent in 1.2.' },
           { name: 'Status', type: 'String', required: 'O', description: '', guidance: 'Payment status code from 1.16, e.g. HH5006.' },
           { name: 'Message', type: 'String', required: 'O', description: '', guidance: 'Text description of the status.' },
-          { name: 'Date', type: 'String', required: 'O', description: '', guidance: 'When the status changed, as an ISO 8601 timestamp.' }
+          { name: 'Date', type: 'String', required: 'O', description: '', guidance: 'When the status changed, as an ISO 8601 timestamp.' },
+          ...WEBHOOK_OUTGOING_PROPOSED
         ],
         sampleRequest: {
           TransactionNumber: "2613732480",
           ClientRefNumber: "HK2613732480",
           Status: "HH5006",
           Message: "Payment processed",
-          Date: "2024-10-03T15:34:26.85"
+          Date: "2024-10-03T15:34:26.85",
+          PayOutAmount: 100.00,
+          PayOutCurrency: "USD",
+          Charges: 15.00,
+          ChargesCurrency: "USD",
+          BankChargesType: "SHA"
         }
       }
     ],
@@ -787,13 +797,13 @@ export const API_ENDPOINTS: EndpointSpec[] = [
           FileName: "test doc",
           FileType: "supporting documents",
           FileExtention: ".pdf",
-          FileBase64String: "/9j/4GET APPAAQSkZJRgABAQAAAQABAAD/....."
+          FileBase64String: "JVBERi0xLjQKJSBzYW1wbGUgZG9jdW1lbnQK"
         },
         {
           FileName: "test bill",
           FileType: "service agreement",
           FileExtention: ".pdf",
-          FileBase64String: "/9j/4GET JCEKXLLJJJRgABAkJKJHKKKMAD/....."
+          FileBase64String: "JVBERi0xLjQKJSBzYW1wbGUgZG9jdW1lbnQK"
         }
       ]
     },

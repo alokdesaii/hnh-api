@@ -1,4 +1,5 @@
 import type { Parameter } from '../data/apiSpec';
+import { charRuleFor, FILE_LIMITS, isDocumentType } from '../data/proposedRules.ts';
 
 // Sandbox validation, following the Y/C/O rules and lengths in HnH_API_V2.3.3.pdf.
 // Returns a list of problems; empty means the request would pass validation.
@@ -83,6 +84,62 @@ function checkFields(body: Record<string, unknown>, params: Parameter[], prefix 
     if (p.name === 'OtherCodeType' && text !== 'IBAN') {
       errors.push(`${name} must be "IBAN".`);
     }
+    // Proposed character rules (src/data/proposedRules.ts), pending approval
+    const rule = charRuleFor(p.name);
+    if (rule && !p.enumOptions && !rule.pattern.test(text)) {
+      errors.push(`${name} may only contain ${rule.allowed}. (proposed rule)`);
+    }
+  }
+  return errors;
+}
+
+// ── Proposed file rules (src/data/proposedRules.ts), pending approval ──────────
+const MB = 1024 * 1024;
+const b64Bytes = (b64: string) => Math.floor((b64.length * 3) / 4) - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
+
+// Identifies the file from its first bytes, so a renamed file can't pass as a PDF.
+export function detectFileType(b64: string): 'pdf' | 'png' | 'jpg' | 'txt' | null {
+  if (b64.startsWith('JVBER')) return 'pdf';
+  if (b64.startsWith('iVBORw0KGgo')) return 'png';
+  if (b64.startsWith('/9j/')) return 'jpg';
+  try {
+    const head = atob(b64.slice(0, 4000 - (b64.slice(0, 4000).length % 4)));
+    return /^[\x09\x0A\x0D\x20-\x7E\x80-\xFF]*$/.test(head) ? 'txt' : null;
+  } catch {
+    return null;
+  }
+}
+
+function checkFiles(endpointId: string, files: Record<string, unknown>[], prefix: (i: number) => string): string[] {
+  const errors: string[] = [];
+  const allowed = FILE_LIMITS.types[endpointId] ?? [];
+  let total = 0;
+  files.forEach((f, i) => {
+    const b64 = typeof f?.FileBase64String === 'string' ? f.FileBase64String.trim() : '';
+    if (!b64) return; // "mandatory" is reported by the field checks
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64) || b64.length % 4 !== 0) {
+      errors.push(`${prefix(i)}FileBase64String isn't valid Base64.`);
+      return;
+    }
+    const bytes = b64Bytes(b64);
+    total += bytes;
+    if (bytes > FILE_LIMITS.maxFileMB * MB) {
+      errors.push(`${prefix(i)}FileBase64String is ${(bytes / MB).toFixed(1)} MB; the limit is ${FILE_LIMITS.maxFileMB} MB per file. (proposed rule)`);
+    }
+    const type = detectFileType(b64);
+    if (!type || !allowed.includes(type)) {
+      errors.push(`${prefix(i)}FileBase64String must be a ${allowed.join(', ')} file${type ? ` (this looks like ${type})` : ''}. (proposed rule)`);
+    }
+    if (endpointId === 'remitter-file-upload') {
+      const ext = String(f.FileExtention ?? '').trim().toLowerCase().replace(/^\./, '');
+      if (ext && !allowed.includes(ext)) errors.push(`${prefix(i)}FileExtention must be .${allowed.join(', .')}.`);
+      if (!blank(f.FileType) && !isDocumentType(String(f.FileType))) {
+        errors.push(`${prefix(i)}FileType must be a document type from 1.14, e.g. "supporting documents". (proposed rule)`);
+      }
+    }
+  });
+  if (total > FILE_LIMITS.maxRequestMB * MB) {
+    errors.push(`Files total ${(total / MB).toFixed(1)} MB; the limit is ${FILE_LIMITS.maxRequestMB} MB per request. (proposed rule)`);
   }
   return errors;
 }
@@ -159,7 +216,7 @@ export function validateBody(endpointId: string, body: unknown, params: Paramete
   // 1.9 takes an array of files
   if (Array.isArray(body)) {
     if (body.length === 0) return ['Send at least one file.'];
-    return body.flatMap((item, i) => checkFields(item ?? {}, params, `[${i}] `));
+    return [...body.flatMap((item, i) => checkFields(item ?? {}, params, `[${i}] `)), ...checkFiles(endpointId, body, (i) => `[${i}] `)];
   }
   if (typeof body !== 'object' || body === null) return ['The request body must be a JSON object.'];
   const b = body as Record<string, unknown>;
@@ -171,7 +228,10 @@ export function validateBody(endpointId: string, body: unknown, params: Paramete
   if (nested.length) {
     const files = b.FileUpload;
     if (!Array.isArray(files) || files.length === 0) errors.push('FileUpload must contain at least one file.');
-    else files.forEach((f, i) => errors.push(...checkFields(f ?? {}, nested, `FileUpload[${i}].`)));
+    else {
+      files.forEach((f, i) => errors.push(...checkFields(f ?? {}, nested, `FileUpload[${i}].`)));
+      errors.push(...checkFiles(endpointId, files, (i) => `FileUpload[${i}].`));
+    }
   }
   if (endpointId === 'create-transaction') errors.push(...transactionRules(b));
   return errors;

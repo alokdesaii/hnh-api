@@ -68,6 +68,7 @@ Every field row has a 2px left rule (`.req-rule .req-Y|C|O`):
 
 ## Content rules
 - **The spec is the source of truth** for fields, lengths, Y/C/O, codes and sample shapes (src/data/apiSpec.ts). Never invent requirements or response fields.
+- **Proposed rules are labelled.** Anything recommended but not in the signed spec lives in src/data/proposedRules.ts and shows a dashed-teal `ProposedTag` ("Proposed"), a dashed-teal "Proposed — pending approval" aside on the method page, and an entry at the top of Version control. Sandbox errors from these rules end in "(proposed rule)".
 - **Portal help is labelled.** Field `guidance` shows under a "Guidance" eyebrow; guides live in src/data/guides.ts. Where the spec has no remark and there's no guidance, show "No remarks in the specification."
 - **Sandbox only.** The console never sends real requests. It validates with src/utils/validate.ts (the same rules the docs picker uses) and returns documented response shapes. The code samples and exports point at the production URL for clients' own servers.
 - **Copy:** sentence case, plain verbs ("Send request", "Reset", "Forget"), no marketing claims or compliance badges.

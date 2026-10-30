@@ -12,6 +12,7 @@ import {
 } from '../utils/codeGenerators';
 import { Play, Copy, Check, RefreshCw, Clock, Paperclip, Download, Link2 } from 'lucide-react';
 import { downloadJsonFile } from '../utils/exporters';
+import { DOCUMENT_TYPES, FILE_LIMITS } from '../data/proposedRules';
 import { getFlow, clearFlow, rememberFrom, applyFlow, flowValueFor } from '../utils/flow';
 
 interface ApiPlaygroundProps {
@@ -119,6 +120,7 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
   const [pathValues, setPathValues] = useState<Record<string, string>>(initial.path);
   const [carried, setCarried] = useState<string[]>(initial.filled);
   const [copiedBody, setCopiedBody] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [authUser, setAuthUser] = useState(user?.username ?? '');
   const [authPass, setAuthPass] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
@@ -205,6 +207,18 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
       }
     }
 
+    // 1.14: the proposed full list of document types, filtered like the real method would.
+    if (endpoint.id === 'remitter-doc-types') {
+      const ct = (pathValues.clientType ?? '').trim();
+      if (!['sub-client-corporate', 'sub-client-individual'].includes(ct)) return fail(['clientType must be one of: sub-client-individual, sub-client-corporate.']);
+      const country = (pathValues.countryname ?? '').trim();
+      const list = DOCUMENT_TYPES.filter((d) => d.clientType === ct && (!country || d.countries === 'All' || d.countries.toLowerCase().includes(country.toLowerCase())));
+      return done(
+        { RemitterDocumentTypes: list.map((d) => ({ DocumentName: d.name, ClientType: d.clientType, ApplicableCountries: d.countries })), StatusMessage: 'SUCCESS', StatusCode: 'HH5000' },
+        'HH5000'
+      );
+    }
+
     const sample = endpoint.sampleResponse as Record<string, unknown>;
     if (endpoint.id === 'transaction-status') return finish({ ...sample, ClientReferenceNo: pathValues.ClientReferenceNo }, String(sample.StatusCode), 200, start);
     done(sample, String(sample.StatusCode ?? 'HH5000'));
@@ -231,7 +245,25 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
   const rest = params.filter((p) => !requiredNow.has(p.name));
 
   const attachFiles = async (files: FileList | null) => {
+    setAttachError(null);
     if (!files?.length) return;
+    // Proposed limits (src/data/proposedRules.ts): reject before reading the file into the page.
+    const allowed = FILE_LIMITS.types[endpoint.id] ?? [];
+    const MB = 1024 * 1024;
+    const problems = [...files].flatMap((f) => {
+      const ext = f.name.split('.').pop()?.toLowerCase().replace('jpeg', 'jpg') ?? '';
+      return [
+        ...(f.size > FILE_LIMITS.maxFileMB * MB ? [`${f.name} is ${(f.size / MB).toFixed(1)} MB (limit ${FILE_LIMITS.maxFileMB} MB per file)`] : []),
+        ...(!allowed.includes(ext) ? [`${f.name} isn't a ${allowed.join(', ')} file`] : []),
+      ];
+    });
+    const total = [...files].reduce((n, f) => n + f.size, 0);
+    if (total > FILE_LIMITS.maxRequestMB * MB) problems.push(`these files total ${(total / MB).toFixed(1)} MB (limit ${FILE_LIMITS.maxRequestMB} MB per request)`);
+    if (problems.length) {
+      setAttachError(`Not attached: ${problems.join('; ')}.`);
+      if (fileInput.current) fileInput.current.value = '';
+      return;
+    }
     const body = parseBody() ?? (endpoint.id === 'upload-file' ? [] : { FileUpload: [] });
     const txn = Array.isArray(body) ? body[0]?.TransactionNumber ?? '' : '';
     // Replace the document's placeholder entries with the chosen files.
@@ -412,7 +444,7 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
                   <div className="flex items-center gap-3">
                     {FILE_ENDPOINTS.includes(endpoint.id) && (
                       <>
-                        <input ref={fileInput} type="file" multiple accept={endpoint.id === 'upload-file' ? '.pdf,.jpg,.png,.txt' : '.pdf'} className="hidden" onChange={(e) => attachFiles(e.target.files)} />
+                        <input ref={fileInput} type="file" multiple accept={(FILE_LIMITS.types[endpoint.id] ?? []).map((t) => `.${t}${t === 'jpg' ? ',.jpeg' : ''}`).join(',')} className="hidden" onChange={(e) => attachFiles(e.target.files)} />
                         <button onClick={() => fileInput.current?.click()} className="text-[12px] text-code-dim hover:text-white flex items-center gap-1 cursor-pointer">
                           <Paperclip className="w-3 h-3" /> Attach files
                         </button>
@@ -429,6 +461,16 @@ export const ApiPlayground: React.FC<ApiPlaygroundProps> = ({ endpoint, subtypeI
                     </button>
                   </div>
                 </div>
+                {attachError && (
+                  <p role="alert" className="mb-2 px-1 text-[12px] text-[#ec7a70]">
+                    {attachError}
+                  </p>
+                )}
+                {FILE_ENDPOINTS.includes(endpoint.id) && (
+                  <p className="mb-2 px-1 text-[11px] text-code-dim">
+                    Proposed limits: {FILE_LIMITS.maxFileMB} MB per file, {FILE_LIMITS.maxRequestMB} MB per request · {(FILE_LIMITS.types[endpoint.id] ?? []).join(', ')}
+                  </p>
+                )}
                 {bodyMode === 'form' && canForm ? (
                   formUsable ? (
                     <div className="space-y-3">

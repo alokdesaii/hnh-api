@@ -5,6 +5,14 @@ import { Check, Copy, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { generatePostmanCollection, downloadJsonFile } from '../utils/exporters';
 import { conditionalRequirements } from '../utils/validate';
+import { charRuleFor, DOCUMENT_TYPES, PROPOSED_LABEL, PROPOSED_NOTES } from '../data/proposedRules';
+
+// Marks anything not in the signed specification (src/data/proposedRules.ts).
+export const ProposedTag: React.FC = () => (
+  <span title={PROPOSED_LABEL} className="inline-block align-[1px] mono text-[10px] font-medium uppercase tracking-[0.06em] text-tide border border-dashed border-tide/60 rounded-[4px] px-1 py-px mr-1.5">
+    Proposed
+  </span>
+);
 
 interface EndpointDocViewProps {
   endpoint: EndpointSpec;
@@ -47,6 +55,7 @@ const FieldRow: React.FC<{ p: Parameter; copied: boolean; onCopy: () => void; no
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
         <code className="text-[13px] font-medium text-ink break-all">{p.name}</code>
+        {p.proposed && <ProposedTag />}
         <button
           onClick={onCopy}
           className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 w-6 h-6 grid place-items-center rounded text-ink-3 hover:text-ink hover:bg-well transition-opacity cursor-pointer"
@@ -83,6 +92,12 @@ const FieldRow: React.FC<{ p: Parameter; copied: boolean; onCopy: () => void; no
         </p>
       )}
       {!p.description && !p.guidance && <p className="text-ink-4">No remarks in the specification.</p>}
+      {!p.enumOptions && charRuleFor(p.name) && (
+        <p className="mt-1.5 text-[12px] text-ink-3">
+          <ProposedTag />
+          Allowed: {charRuleFor(p.name)!.allowed}
+        </p>
+      )}
       {p.enumOptions && (
         <div className="flex flex-wrap gap-1 mt-2">
           {p.enumOptions.map((opt) => (
@@ -173,6 +188,18 @@ export const EndpointDocView: React.FC<EndpointDocViewProps> = ({ endpoint, subt
               <li key={i}>{note}</li>
             ))}
           </ul>
+        </aside>
+      )}
+
+      {PROPOSED_NOTES[endpoint.id] && (
+        <aside className="mb-10 pl-4 border-l-2 border-dashed border-tide">
+          <div className="eyebrow text-tide mb-2">{PROPOSED_LABEL}</div>
+          <ul className="space-y-1.5 text-[13px] text-ink-2 leading-relaxed">
+            {PROPOSED_NOTES[endpoint.id].map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[12px] text-ink-3">Not in the signed V2.3.3 specification. Recommended by Harbour &amp; Hills and checked by the sandbox; may change before release.</p>
         </aside>
       )}
 
@@ -270,6 +297,28 @@ export const EndpointDocView: React.FC<EndpointDocViewProps> = ({ endpoint, subt
             <span className="flex items-center gap-1.5"><span className="w-[2px] h-3 rounded" style={{ background: 'repeating-linear-gradient(to bottom, var(--cond) 0 3px, transparent 3px 6px)' }} />C conditional</span>
             <span className="flex items-center gap-1.5"><span className="w-[2px] h-3 rounded bg-rule" />O optional</span>
           </p>}
+        </Section>
+      )}
+
+      {endpoint.id === 'remitter-doc-types' && (
+        <Section title="Document types" meta={`${DOCUMENT_TYPES.length} types`} aside={<ProposedTag />}>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {(['sub-client-corporate', 'sub-client-individual'] as const).map((ct) => (
+              <div key={ct} className="folio overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-rule-soft flex items-center justify-between">
+                  <code className="text-[12px] text-ink-2">{ct}</code>
+                  <span className="text-[12px] text-ink-4 tabular-nums">{DOCUMENT_TYPES.filter((d) => d.clientType === ct).length}</span>
+                </div>
+                {DOCUMENT_TYPES.filter((d) => d.clientType === ct).map((d) => (
+                  <div key={d.name} className="px-4 py-2 border-b border-rule-soft last:border-0 flex items-center justify-between gap-3">
+                    <code className="text-[13px] text-ink">{d.name}</code>
+                    <span className="text-[12px] text-ink-4">{d.countries}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <p className="mt-2.5 text-[12px] text-ink-3">Use the exact name as FileType in 1.13 Remitter FileUpload.</p>
         </Section>
       )}
 

@@ -2,7 +2,8 @@
 // Run: node --experimental-strip-types src/utils/validate.check.ts
 import type { Parameter } from '../data/apiSpec.ts';
 import { API_ENDPOINTS } from '../data/apiSpec.ts';
-import { validateBody, unknownFields, isCountryCode, isCurrencyCode, isUsDate } from './validate.ts';
+import { validateBody, unknownFields, isCountryCode, isCurrencyCode, isUsDate, detectFileType } from './validate.ts';
+import { DOCUMENT_TYPES, FILE_LIMITS } from '../data/proposedRules.ts';
 
 const assert = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(`FAILED: ${msg}`);
@@ -68,6 +69,42 @@ assert(unknownFields(sample, tx.parameters!).length === 0, 'sample has no unknow
 const rf = API_ENDPOINTS.find((e) => e.id === 'remitter-file-upload')!;
 assert(unknownFields({ SubClientAccountNumber: 'x', FileUpload: [{ FileName: 'a', Extra: 1 }] }, rf.parameters!)[0]?.startsWith('FileUpload[0].Extra'), 'nested unknown field found');
 assert(unknownFields([{ TransactionNumber: '1', FileName: 'a', FileBase64String: 'x', Foo: 1 }], API_ENDPOINTS.find((e) => e.id === 'upload-file')!.parameters!).length === 1, 'array unknown field found');
+
+// Proposed: allowed characters
+assert(has(t({ PaymentType: 'C2C', TransactionType: 'WT', BeneficiaryMobileNo: '+919876543210', Relationship: 'Spouse', BeneficiaryFirstName: 'J0hn', BeneficiaryLastName: 'Smith' }), 'BeneficiaryFirstName may only contain'), 'digits rejected in person name');
+assert(t({ PaymentType: 'C2C', TransactionType: 'WT', BeneficiaryMobileNo: '+919876543210', Relationship: 'Spouse', BeneficiaryFirstName: "Mary-Ann O'Neil", BeneficiaryLastName: 'St. John' }).length === 0, "names with - ' . accepted");
+assert(has(t({ BeneficiaryCompanyName: 'Smith & Co' }), 'BeneficiaryCompanyName may only contain'), '& rejected (SWIFT set)');
+assert(t({ BeneficiaryCompanyName: 'Smith and Co. (HK) Ltd' }).length === 0, 'SWIFT-safe company name accepted');
+assert(has(t({ ClientReferenceNo: 'HK 0028/54' }), 'ClientReferenceNo may only contain'), 'reference allows only letters, digits, -');
+assert(has(t({ RemitterAccountNumber: '102344001010300010127' }), 'RemitterAccountNumber may only contain'), 'account number format');
+assert(has(t({ IntermediaryBankSwiftCode: 'GECG12HH' }), 'IntermediaryBankSwiftCode'), 'SWIFT format');
+assert(has(t({ PurposeOfPayment: 'Payment <script>' }), 'PurposeOfPayment may only contain'), 'markup characters rejected');
+const rem = API_ENDPOINTS.find((e) => e.id === 'create-remitter')!.requestSubtypes![1];
+const remBody = rem.sampleRequest as Record<string, unknown>;
+assert(has(validateBody('create-remitter', { ...remBody, Email: 'not-an-email' }, rem.parameters), 'Email may only contain'), 'email format');
+assert(has(validateBody('create-remitter', { ...remBody, Phone: '98765 43210' }, rem.parameters), 'Phone may only contain'), 'phone format');
+
+// Proposed: files
+const pdfB64 = btoa('%PDF-1.4\n% test\n');
+const pngB64 = 'iVBORw0KGgoAAAANSUhEUg==';
+assert(detectFileType(pdfB64) === 'pdf' && detectFileType(pngB64) === 'png' && detectFileType('/9j/4AAQ') === 'jpg' && detectFileType(btoa('hello')) === 'txt', 'file types detected from content');
+const up = API_ENDPOINTS.find((e) => e.id === 'upload-file')!;
+const upItem = { TransactionNumber: '453455453', FileName: 'invoice' };
+assert(validateBody('upload-file', [{ ...upItem, FileBase64String: pdfB64 }], up.parameters!).length === 0, 'pdf accepted in 1.9');
+assert(has(validateBody('upload-file', [{ ...upItem, FileBase64String: 'not base64!' }], up.parameters!), 'valid Base64'), 'bad Base64 rejected');
+const big = 'A'.repeat(Math.ceil(((FILE_LIMITS.maxFileMB * 1024 * 1024 + 10) * 4) / 3 / 4) * 4);
+assert(has(validateBody('upload-file', [{ ...upItem, FileBase64String: big }], up.parameters!), 'per file'), 'oversized file rejected');
+const fourMB = 'A'.repeat(Math.ceil((4 * 1024 * 1024 * 4) / 3 / 4) * 4);
+assert(has(validateBody('upload-file', [1, 2, 3].map(() => ({ ...upItem, FileBase64String: fourMB })), up.parameters!), 'per request'), 'request total limited');
+const rf2 = API_ENDPOINTS.find((e) => e.id === 'remitter-file-upload')!;
+const rfBody = (o: object) => ({ SubClientAccountNumber: '102-344-001-01-03-0001-01279', FileUpload: [{ FileName: 'doc', FileType: 'supporting documents', FileExtention: '.pdf', FileBase64String: pdfB64, ...o }] });
+assert(validateBody('remitter-file-upload', rfBody({}), rf2.parameters!).length === 0, 'valid remitter upload passes');
+assert(has(validateBody('remitter-file-upload', rfBody({ FileBase64String: pngB64 }), rf2.parameters!), 'must be a pdf'), 'png rejected in 1.13');
+assert(has(validateBody('remitter-file-upload', rfBody({ FileType: 'holiday photos' }), rf2.parameters!), 'document type from 1.14'), 'unknown document type rejected');
+assert(has(validateBody('remitter-file-upload', rfBody({ FileExtention: '.docx' }), rf2.parameters!), 'FileExtention'), 'extension checked');
+
+// Proposed: document types fit the spec's FileType length (27)
+assert(DOCUMENT_TYPES.every((d) => d.name.length <= 27), 'document type names fit FileType length');
 
 // Every sample request in the portal must pass its own checks (catches rules that are too strict)
 for (const ep of API_ENDPOINTS) {
